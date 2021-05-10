@@ -1,0 +1,649 @@
+#include <linux/init.h>
+#include <linux/module.h>
+#include <linux/kernel.h>
+#include <linux/sched.h>
+#include <linux/fs.h>
+#include <linux/fdtable.h>
+#include <linux/net.h>
+#include <net/sock.h>
+
+
+MODULE_LICENSE("GPL");
+MODULE_AUTHOR("_");
+MODULE_DESCRIPTION("A test of raspmonitor");
+
+// This is the path of raspmonitor.h
+#include "../fs/linux-4.19.91/raspmonitor.h"
+
+// These are headers that define the data structure used by 
+// this module.
+#include "rasploadable.h"
+
+
+#define RASPMONITOR_DBG 0
+#define RASPMONITOR_VERBOSE 1
+
+
+/******************************************************************************
+ * 
+ * Definition of data structure of command_windows - linked list
+ * 
+ * ***************************************************************************/
+
+// The head pointer to a linked list. 
+// The linked list contains a command_window as its each element. 
+struct command_window* command_windows = NULL;
+
+
+// Initialize the "command_windows" global variable
+void init_command_windows(void) {
+    command_windows = NULL;
+
+}
+
+// Destroy the linked list and free all memory.
+void destroy_command_windows(void) {
+    struct command_window* current_window = command_windows;
+    struct command_window* tmp = NULL;
+    while (current_window) {
+        tmp = current_window->next;
+        kfree(current_window);
+        current_window = tmp;
+    }
+}
+
+// Return 1 if they are equal, 
+// Return 0 if not equal. 
+int is_command_window_key_equal(struct command_window_key* key1, struct command_window_key* key2) {
+    if (NULL == key1 || NULL == key2) {
+        return 0;
+    }
+    if (key1->pid == key2->pid) {
+        return 1;
+    } else {
+        return 0;
+    }
+}
+
+// Return NULL if not found
+struct command_window* find_command_window(struct command_window_key *key) {
+    struct command_window* current_window = command_windows;
+    struct command_window* tmp = NULL;
+    while (current_window) {
+        tmp = current_window->next;
+        if (is_command_window_key_equal(key, &(current_window->key))) {
+            return current_window;
+        } else {
+            current_window = tmp;
+        }
+    }
+    return NULL;
+}
+
+
+void init_command_window(struct command_window* new_window) {
+    int i = 0;
+    for (i = 0; i < COMMAND_WINDOW_SIZE; i++) {
+        new_window->command_window[i] = none_command;
+    }
+}
+
+// create and return a command_window. 
+// Note: it's the caller's responsibility to check existence. 
+struct command_window* new_command_window(struct command_window_key* key) {
+    struct command_window* tmp = kmalloc(sizeof(struct command_window*), GFP_KERNEL);
+    if (tmp) {
+        init_command_window(tmp);
+        tmp->key = *key; 
+        tmp->next = command_windows;
+        command_windows = tmp;
+        return tmp;
+    } else {
+        return NULL;
+    }
+
+}
+
+// Remove and return the removed command window. If not found, return NULL
+struct command_window* remove_command_window(struct command_window_key* key) {
+    struct command_window* current_window = command_windows;
+    struct command_window* next_window = NULL;
+    if (NULL == current_window) {
+        return NULL;
+    }
+    if (is_command_window_key_equal(key, &(current_window->key))) {
+        command_windows = current_window->next;
+        return current_window;
+    }
+    next_window = current_window->next;
+    while (next_window) {
+        if (is_command_window_key_equal(key, &(next_window->key))) {
+            current_window->next = next_window->next;
+            return next_window;
+        }
+        current_window = next_window;
+        next_window = current_window->next;
+    }
+    return NULL;
+}
+
+
+
+
+
+
+
+
+/******************************************************************************
+ * 
+ * Definition of classifier 
+ * 
+ * ***************************************************************************/
+
+// Return:  
+//  0   if "descendant" is NOT a descendant of ancestor
+//  1   if "descendant" is a descendant of ancestor
+int is_descendant(struct task_struct* ancestor, struct task_struct* descendant)
+{
+    struct task_struct* p_tmp;
+    // all process is a descendant of process 0.
+    if (ancestor->pid == 0) return 1;
+    for (p_tmp = descendant; p_tmp->pid; p_tmp = p_tmp->real_parent) {
+        if (p_tmp == ancestor) return 1;
+    }
+    return 0;
+}
+
+
+
+// Find socket tuple (sip, sport, dip, dport) from which a given command is executed. 
+//
+// Return	:	
+// 	this function will return a pointer to the ISM according to the command's socket 
+// 	and pid of "dropbear" or "telnetd". 
+// 	If the command is from a new socket+pid combination, then a new ISM is created 
+// 	and returned. 
+//
+// 	TODO: the created ISM's will never expire. So there is a potential memory leak. 
+//
+void get_current_command_window(void) {
+    struct task_struct* t, *prev;
+    int i = 0;
+    int found = 0;
+    struct socket *socket;
+    uint32_t foreign_ip, local_ip;
+    uint16_t foreign_port, local_port;
+    t = current;
+    do {
+        if (strncmp("dropbear", t->comm, 8) == 0) {
+            // from dropbear
+            while (t->files->fdt->fd[i] != NULL) {
+                // if it is a socket
+                if (S_ISSOCK(t->files->fdt->fd[i]->f_path.dentry->d_inode->i_mode)) {
+                    socket = (struct socket*)(t->files->fdt->fd[i]->private_data);
+		            // get remote IPv4 address
+                    foreign_ip = socket->sk->__sk_common.skc_daddr;
+		            // get local IPv4 address
+                    local_ip = socket->sk->__sk_common.skc_rcv_saddr;
+		            // get remote IPv4 address
+                    foreign_port = socket->sk->__sk_common.skc_dport;
+		            // get local IPv4 address
+                    local_port = socket->sk->__sk_common.skc_num;
+                    printk(KERN_INFO "[raspmonitor] : find a socket of dropbear: %d, %s, fip: %u, fport: %u, lip: %u, lport: %u\n", t->pid, t->comm, foreign_ip, foreign_port, local_ip, local_port);
+		            // if we find a record, then we we set "found" and break;
+                    found = 1; 
+		            // break;
+                }
+                i++;
+            }
+	        //if "found" is not set, then there is a new login session. 
+	        //we will create a new entry for it. 
+	        //note: we will stop when we first time hit "dropbear", so we need a break here. 
+            // break;   
+        } else if (strncmp("telnetd", t->comm, 7) == 0) {
+            // from telnetd
+            break;
+        } else {
+            // from local
+        }
+        prev = t;
+        t = t->parent;
+    } while (prev->pid != 0);
+}
+
+
+// This will trace back all parent pids. 
+// stop and alert if it meets 'dropbear'. 
+// Return   :   
+//  0   if current process is not spawned from remote;
+//  1   if current process is spawned from remote; 
+int is_from_remote(void) {
+    struct task_struct *t, *prev;
+    int ret = 0;
+    t = current;
+    do {
+        if (strncmp("dropbear", t->comm, 8) == 0) {
+#if RASPMONITOR_VERBOSE
+            printk(KERN_INFO "[raspmonitor] : from dropbear (remote): %d, %s\n", t->pid, t->comm);
+            ret = 1;
+#endif
+            // break;
+        } else if (strncmp("telnetd", t->comm, 7) == 0) {
+#if RASPMONITOR_VERBOSE
+            printk(KERN_INFO "[raspmonitor] : from telnetd (remote): %d, %s\n", t->pid, t->comm);
+            ret = 1;
+            // break;
+#endif
+        } else {
+#if RASPMONITOR_DBG
+            printk(KERN_INFO "[raspmonitor_dbg] : %d, %s\n", t->pid, t->comm);
+#endif
+        }
+        prev = t;
+        t = t->parent;
+    } while (prev->pid != 0);
+
+    return ret;
+}
+
+
+
+void init_single_command_window(void) {
+    int i = 0;
+    for (i = 0; i < COMMAND_WINDOW_SIZE; i++) {
+        command_window[i] = none_command;
+    }
+}
+
+
+// update the comamnd_window with a given command, cmdstr. 
+// Return the length of current window. 
+int update_command_window(char* cmdstr) {
+    int i = 0;
+
+    // If it's full
+    if (none_command != command_window[COMMAND_WINDOW_SIZE-1]) {
+        // shift the window.
+        for (i = 1; i < COMMAND_WINDOW_SIZE; i++) {
+            command_window[i-1] = command_window[i];
+        }
+        // Put the new command in the last spot.
+        command_window[i-1] = str_to_command(cmdstr);
+#if RASPMONITOR_DBG 
+        if (command_window[i-1] < MAX_COMMAND) {
+            printk(KERN_INFO "[raspmonitor_dbg] : updated window with %s command!\n", enum2cmd_table[command_window[i-1]]);
+        } else {
+            printk(KERN_INFO "[raspmonitor_dbg] : command out of range!\n");
+        }
+#endif
+        return COMMAND_WINDOW_SIZE;
+    }
+
+    // else, add the new command in the first available spot.
+    for (i = 0; i < COMMAND_WINDOW_SIZE; i++) {
+        if (none_command == command_window[i]) {
+            command_window[i] = str_to_command(cmdstr);
+#if RASPMONITOR_DBG 
+            if (command_window[i] < MAX_COMMAND) {
+                printk(KERN_INFO "[raspmonitor_dbg] : updated window with %s command!\n", enum2cmd_table[command_window[i]]);
+            } else {
+                printk(KERN_INFO "[raspmonitor_dbg] : command out of range!\n");
+            }
+#endif
+            return i+1;
+        }
+    }
+
+    // should not reach here. 
+#if RASPMONITOR_DBG 
+    printk(KERN_INFO "[raspmonitor_dbg] : ERROR: update_command_window.\n");
+#endif
+    init_single_command_window();
+    return 0;
+} 
+
+
+// This function returns a pointer that points to
+// the beginning of the real command string. 
+// E.g., if "/bin/bash" is given, then "bash" is return. 
+// 
+// Input    :   
+//  cmd : the string wants to be dealt with. 
+//  length  :   the length of the whole string, '\0' not included.
+//
+// return   :   a pointer pointing to the beginning of the wanted string.
+//              If a '/' is not found, then return the original pointer + 1. 
+//
+// The reason I return origin + 1 instead of origin is because of the case 
+// like this :  "/bash".   This command locates under "/" directly. 
+// So, the "bash" is returned instead of "/bash"
+//
+char* get_real_command_string(char* cmd, int length) {
+    while (length > 0) {
+        if (*(cmd + length) != '/') {
+            length -= 1;
+        } else {
+            return (cmd+length+1);
+        }
+    }
+    return cmd;
+}
+
+
+
+// Tools to translate char* into command type. 
+command str_to_command(char *cmd) {
+    int i = 0;
+    int length = strlen(cmd);
+    char * real_name;
+    int real_length;
+    // TODO: 
+    // This is a shortcut to check whether it's a binary execution. 
+    // I would suggest to check whether it's a binary execution in 
+    // the built-in kernel rather than here. 
+    if (strncmp("./", cmd, 2) == 0) {
+        return BINARY_COMMAND_uniq_name_flag;
+    }
+    real_name = get_real_command_string(cmd, length);
+    real_length = strlen(real_name);
+    for (; i < MAX_COMMAND; i++) {
+        if (strncmp(enum2cmd_table[i], real_name, real_length) == 0) {
+            return (command)i;
+        }
+    }
+#if RASPMONITOR_DBG
+    printk(KERN_INFO "[raspmonitor_dbg] : real_name : %s\n", real_name);
+#endif
+    return UNKNOWN_uniq_name_flag;
+}
+
+
+
+// The major function that computes the max score given 
+// a list of commands. 
+// Input    :   array of command, and length of the array
+// Output   :   the max score of the given command list. 
+uint32_t compute_max_score_path(command cmds[], int length) {
+    uint32_t max_score = 0;
+    uint32_t real_length = 0;
+    int i = 0;
+    int k = 0;
+    command cmd1;
+    command cmd2;
+    capability current_step;
+    capability next_step;
+    struct transition tran;
+    if (length < 2) {
+        return 0;
+    }
+    for (i=1; i<length; i++) {
+        cmd1 = cmds[i-1];
+        cmd2 = cmds[i];
+        current_step = cmd2capability[(int)cmd1];
+        next_step = cmd2capability[(int)cmd2];
+        tran.provide = current_step;
+        tran.require = next_step;
+        tran.cmd = cmd2;
+        // check whether tran is in the global transition list. 
+        for (k = 0; k < MAX_TRANSITION; k++) {
+            if (tran.provide == ALL_TRANSITIONS[k].provide && 
+                tran.require == ALL_TRANSITIONS[k].require && 
+                tran.cmd == ALL_TRANSITIONS[k].cmd) 
+            {
+                if (ALL_TRANSITIONS[k].weight > SUSPICIOUS_THRESHOLD) {
+                    max_score += ALL_TRANSITIONS[k].weight;
+                    real_length += 1;
+                }
+                break;
+            }
+        }
+    }
+    if (real_length == 0) {
+        return 0;
+    } else {
+        real_length = real_length > 3 ? real_length : 3;
+        return max_score / real_length;
+        //max_score = do_div(max_score, real_length);
+    }
+}
+
+
+
+// The major function that computes the max score given 
+// a list of commands. 
+// Input    :   array of command, and length of the array
+// Output   :   the max score of the given command list. 
+uint32_t compute_max_score_capability(command cmds[], int length) {
+    uint32_t score = 0;
+    uint32_t max_score = 0;
+    uint32_t real_length = 0;
+    int i = 0;
+    int j = 0;
+    int k = 0;
+    command cmd1;
+    command cmd2;
+    struct transition tran;
+    // provides is an array.
+    // the subscript if the array is the capability. 
+    // E.g., if provides[0] != 0, then FP is in the set 
+    // If provides[0] == 0, then FP is not in the set.   
+    capability provides[MAX_CAPABILITY] = {0};
+    if (length < 2) {
+        return 0;
+    }
+    // Go through all the commands in the list. 
+    for (i=1; i < length; i++) {
+        cmd1 = cmds[i-1];
+        cmd2 = cmds[i];
+        // add cmd1 into the provides. 
+        provides[(int)cmd2capability[(int)cmd1]] = 1;
+        max_score = 0;
+        // For each cmd2, go thourgh all the possible transitions between 
+        // cmd2 and existing commands (i.e., already in the provides.)
+        for (j = 0; j < MAX_CAPABILITY; j++) {
+            // if command 'j' is in the provides.
+            if (provides[j] != 0) {
+                // make a transition between cmd2 and 'j' for comparison purpose 
+                tran.provide = (capability)j;
+                tran.require = cmd2capability[(int)cmd2];
+                tran.cmd = cmd2;
+                // check whether tran is in the global transition list. 
+                for (k = 0; k < MAX_TRANSITION; k++) {
+                    if (tran.provide == ALL_TRANSITIONS[k].provide && 
+                        tran.require == ALL_TRANSITIONS[k].require && 
+                        tran.cmd == ALL_TRANSITIONS[k].cmd) 
+                    {
+                        // if in the list, then check whether the weight is larger 
+                        // than max_score, then update accordingly. 
+                        // printf("transition found!\n");
+                        if (!(ALL_TRANSITIONS[k].weight < max_score)) {
+                            // printf("score updated! %f\n", ALL_TRANSITIONS[k].weight);
+                            max_score = ALL_TRANSITIONS[k].weight;
+                        }            
+                        break;
+                    }
+                }
+            } 
+        }
+        if (max_score > SUSPICIOUS_THRESHOLD) {
+            real_length += 1;
+            score += max_score;
+        }
+    }
+    if (0 == real_length) {
+        return 0;
+    } else {
+        real_length = real_length > 3 ? real_length : 3;
+        return score/real_length;
+    }
+}
+
+
+
+// The major function that computes the max score given 
+// a list of commands. 
+// Input    :   array of command, and length of the array
+// Output   :   the max score of the given command list. 
+uint32_t compute_max_score(command cmds[], int length) {
+    uint32_t score = 0;
+    uint32_t max_score = 0;
+    int i = 0;
+    int j = 0;
+    int k = 0;
+    command cmd1;
+    command cmd2;
+    struct transition tran;
+    // provides is an array.
+    // the subscript if the array is the capability. 
+    // E.g., if provides[0] != 0, then FP is in the set 
+    // If provides[0] == 0, then FP is not in the set.   
+    capability provides[MAX_CAPABILITY] = {0,0,0,0,0};
+    if (length < 2) {
+        return 0;
+    }
+    // Go through all the commands in the list. 
+    for (i=1; i < length; i++) {
+        cmd1 = cmds[i-1];
+        cmd2 = cmds[i];
+        // add cmd1 into the provides. 
+        provides[(int)cmd2capability[(int)cmd1]] = 1;
+        max_score = 0;
+        // For each cmd2, go thourgh all the possible transitions between 
+        // cmd2 and existing commands (i.e., already in the provides.)
+        for (j = 0; j < MAX_CAPABILITY; j++) {
+            // if command 'j' is in the provides.
+            if (provides[j] != 0) {
+                // make a transition between cmd2 and 'j' for comparison purpose 
+                tran.provide = (capability)j;
+                tran.require = cmd2capability[(int)cmd2];
+                tran.cmd = cmd2;
+                // check whether tran is in the global transition list. 
+                for (k = 0; k < MAX_TRANSITION; k++) {
+                    if (tran.provide == ALL_TRANSITIONS[k].provide && 
+                        tran.require == ALL_TRANSITIONS[k].require && 
+                        tran.cmd == ALL_TRANSITIONS[k].cmd) 
+                    {
+                        // if in the list, then check whether the weight is larger 
+                        // than max_score, then update accordingly. 
+                        if (!(ALL_TRANSITIONS[k].weight < max_score)) {
+                            max_score = ALL_TRANSITIONS[k].weight;
+                        }            
+                        break;
+                    }
+                }
+            } 
+        }
+        score += max_score;
+    }
+//    return score / length;
+    printk(KERN_INFO "max_score = %u\n", score);
+    //score = do_div(score, length);
+    printk(KERN_INFO "inside max_score = %u\n", score);
+    return score;
+}
+
+
+
+static int raspmonitor_main(void* pData, void* pReturn) {
+    int ret = 0;
+    uint32_t max_score;
+    int wsize;
+    char* real_name;
+    int cmd_len = strlen(pData);
+    const char* special_command = NULL;
+#if RASPMONITOR_DBG
+    printk(KERN_INFO "[raspmonitor_dbg] : %s is called!\n", (const char*)pData);
+#endif 
+
+    // This is designed to handle the "VALIDATE_SH_EXECUTABLE", "EndofAScript", "EndofAllScripts", and "BeginofAllScripts"
+    // Those commands are special commands that are only used for test purpose. 
+    if (strlen(pData) > 5) {
+        // check VALIDATE_SH_EXECUTABLE
+        special_command = pData;
+        if (strncmp("VALIDATE_SH_EXECUTABLE", special_command, 22) == 0) {
+            printk(KERN_INFO "[raspmonitor] : score: %u, %s benign!\n", 0, (const char*)pData);
+            init_single_command_window();
+            return ret;
+        }
+        // This is whitelist, a benign routine for openwrt
+        if (strncmp("/sbin/askfirst", special_command, 14) == 0) {
+            // printk(KERN_INFO "[raspmonitor] : score: %u, %s benign!\n", 0, (const char*)pData);
+            return ret;
+        }
+        // Handle busybox - will ignore all busybox cause we care about its arguments.
+        real_name = get_real_command_string(pData, cmd_len);
+        if (strncmp("busybox", real_name, 7) == 0) {
+            // printk(KERN_INFO "[raspmonitor] : going to ignore buxybox. \n");
+            return ret;
+        }
+        special_command = pData + 5;
+        if (strncmp("EndofAScript", special_command, 12) == 0) {
+            printk(KERN_INFO "[raspmonitor] : score: %u, %s benign!\n", 0, (const char*)pData);
+            return ret;
+        }
+        if (strncmp("EndofAllScripts", special_command, 15) == 0) {
+            printk(KERN_INFO "[raspmonitor] : score: %u, %s benign!\n", 0, (const char*)pData);
+            return ret;
+        }
+        if (strncmp("BeginofAllScripts", special_command, 17) == 0) {
+            printk(KERN_INFO "[raspmonitor] : score: %u, %s benign!\n", 0, (const char*)pData);
+            return ret;
+        }
+    }
+    
+    // check if current process is spwaned from remote exexution (dropbear/telnetd)
+    if (0 == is_from_remote()) {
+#if RASPMONITOR_VERBOSE
+        printk(KERN_INFO "[raspmonitor] : local execution: %s\n", (const char*)pData);
+#endif
+        return ret; 
+    } else {
+	    // get_current_command_window();
+    }
+
+
+    wsize = update_command_window(pData);
+    max_score = compute_max_score_path(command_window, wsize);
+    //max_score = compute_max_score_capability(command_window, wsize);
+    // max_score = compute_max_score(command_window, wsize) / wsize;
+    if (max_score > 63000000) {
+    //if (max_score > 67000000) {
+#if RASPMONITOR_VERBOSE
+        printk(KERN_INFO "[raspmonitor] : score: %u, %s malicious!\n", max_score, (const char*)pData);
+#endif
+        // init_single_command_window();
+        ret = 1;
+    } else {
+#if RASPMONITOR_VERBOSE
+        printk(KERN_INFO "[raspmonitor] : score: %u, %s benign!\n", max_score, (const char*)pData);
+#endif
+    }
+    return ret; 
+}
+
+
+
+
+static int __init raspmonitor_init(void) {
+    int ret = 0;
+    gRaspmonitorStatus.hook_is_set = 1;
+    raspmonitor_set_hook(raspmonitor_main);
+    init_single_command_window();
+    // init_command_windows();
+    printk(KERN_INFO "[raspmonitor] : initializing.\n");
+    return ret;
+}
+
+
+
+static void __exit raspmonitor_exit(void) {
+    gRaspmonitorStatus.hook_is_set = 0;
+    // destroy_command_windows();
+    printk(KERN_INFO "[raspmonitor] : going to exit.\n");
+}
+
+
+module_init(raspmonitor_init);
+module_exit(raspmonitor_exit);
+
+
