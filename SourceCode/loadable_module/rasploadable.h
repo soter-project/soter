@@ -33,8 +33,7 @@ typedef struct weighted_transition {
 
 // Any transition below this will be considered as non-suspicious operation,
 // thus will not be counted when compute the risk score (max_score)
-// #define SUSPICIOUS_THRESHOLD 20000000
-#define SUSPICIOUS_THRESHOLD 42000000
+#define SUSPICIOUS_THRESHOLD 20000000
 #define COMMAND_WINDOW_SIZE 10
 // command command_window[COMMAND_WINDOW_SIZE];
 

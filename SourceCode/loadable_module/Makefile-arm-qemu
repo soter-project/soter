@@ -1,0 +1,24 @@
+obj-m += raspmonitor_loadable.o
+
+raspmonitor_loadable-objs := rasploadable.o
+
+# Note: 
+# The path following `-C` should be the root folder where you have compiled your 
+# kernle. 
+# E.g., you run `make` at ~/openwrt.15.05.1-compiled/ when you cross compiled kernel.
+# Then, you should set the path following `-C` as ~/openwrt.15.05.1-compiled/ 
+#
+#
+
+OPENWRT_HOME := ~/mount/stuff/openwrt
+
+KDIR    := ${OPENWRT_HOME}/build_dir/target-arm_cortex-a15+neon-vfpv4_musl_eabi/linux-armvirt_32/linux-5.4.31/
+PWD     := $(shell pwd)
+LD      := arm-openwrt-linux-ld
+
+CROSS_COMPILE=arm-openwrt-linux-
+
+all:
+	$(MAKE) ARCH=arm -C $(KDIR) M=$(PWD) CROSS_COMPILE=arm-openwrt-linux- modules 
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) clean

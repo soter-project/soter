@@ -1,0 +1,24 @@
+obj-m += raspmonitor_loadable.o
+
+raspmonitor_loadable-objs := rasploadable.o
+
+# Note: 
+# The path following `-C` should be the root folder where you have compiled your 
+# kernle. 
+# E.g., you run `make` at ~/openwrt.15.05.1-compiled/ when you cross compiled kernel.
+# Then, you should set the path following `-C` as ~/openwrt.15.05.1-compiled/ 
+#
+#
+
+OPENWRT_HOME := ~/Projects/openwrt/openwrt-15.05.1
+
+KDIR    := ${OPENWRT_HOME}/build_dir/target-mipsel_24kec+dsp_uClibc-0.9.33.2/linux-ramips_rt305x/linux-3.18.23/
+PWD     := $(shell pwd)
+LD      := mipsel-openwrt-linux-ld
+
+CROSS_COMPILE=mipsel-openwrt-linux-
+
+all:
+	$(MAKE) ARCH=mips -C $(KDIR) M=$(PWD) CROSS_COMPILE=$(CROSS_COMPILE) modules 
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) clean

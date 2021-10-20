@@ -1,3 +1,5 @@
+#ifndef __CAPABILITY_ENUM_H
+#define __CAPABILITY_ENUM_H
 typedef enum {
 CH = 0,
 RM = 1,
@@ -28,3 +30,4 @@ UNKNOWN = 25,
 none_capability = 26
 } capability;
 #define MAX_CAPABILITY 27
+#endif

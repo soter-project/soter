@@ -481,7 +481,7 @@ static int raspmonitor_main(void* pData, void* pReturn) {
 #if RASPMONITOR_VERBOSE
     printk(KERN_INFO "[raspinfo] : %s from remote pid: %d. parallel_infection_size=%d\n", (const char*)pData, current_window->key.pid, table_size);
 #endif
-    if (max_score > 50000000) {
+    if (max_score > 63000000) {
     //if (max_score > 67000000) {
 #if RASPMONITOR_VERBOSE
         printk(KERN_INFO "[raspmonitor] : score: %u, %s malicious!\n", max_score, (const char*)pData);
