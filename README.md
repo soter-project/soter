@@ -25,7 +25,7 @@ Dataset includes follwing collections:
 
 * BinaryDataset - includes 48,099 malicious binaries.
 * ScriptDataset - includes 3,439 malicious Linux  shell  scripts and 9,337 benign firmware scripts.
-* OpenWrtLogs - includes 167,860 successful OpenWrt infection logs. Collected from 163 high-fidelity software (virtual) IoT devices (as honeypots) on public clouds across the globe at 26 geographically different locations for one month.
+* OpenWrtLogs - has two parts. The part one includes 352,016 different infection incidents, the part two includes 147,860 different infection incidents. Collected from around 200 high-fidelity software (virtual) IoT devices (as honeypots) on public clouds across the globe at 32 geographically different locations.
 
 The extracting password is: soter
 
