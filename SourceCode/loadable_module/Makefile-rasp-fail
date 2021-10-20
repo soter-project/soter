@@ -1,0 +1,33 @@
+obj-m += raspmonitor_loadable.o
+
+raspmonitor_loadable-objs := rasploadable.o
+
+# Note: 
+# The path following `-C` should be the root folder where you have compiled your 
+# kernle. 
+# E.g., you run `make` at ~/openwrt.15.05.1-compiled/ when you cross compiled kernel.
+# Then, you should set the path following `-C` as ~/openwrt.15.05.1-compiled/ 
+#
+#
+
+#OPENWRT_HOME := ~/Projects/openwrt/openwrt-15.05.1
+# BUILDROOT_HOME:= /home/qiqingh/Desktop/compileLearning/buildroot-2020.02.3
+
+KDIR    := /home/qiqingh/Desktop/raspberryPi/rasp-4-19-new/linux/
+PWD     := $(shell pwd)
+
+
+# LD      := arm-buildroot-linux-uclibcgnueabi-ld
+# LD      := arm-linux-gnueabihf-ld
+# LD      := arm-bcm2708-linux-gnueabi-ld #not working
+
+# CROSS_COMPILE=arm-buildroot-linux-uclibcgnueabi-
+CROSS_COMPILE=arm-linux-gnueabihf-
+
+# CROSS_COMPILE=arm-bcm2708-linux-gnueabi- #not working
+
+all:
+	#$(MAKE) ARCH=arm -C $(KDIR) M=$(PWD) CROSS_COMPILE=arm-openwrt-linux- modules 
+	$(MAKE) ARCH=arm -C $(KDIR) M=$(PWD) CROSS_COMPILE=arm-linux-gnueabihf- modules 
+clean:
+	$(MAKE) -C $(KDIR) M=$(PWD) clean
