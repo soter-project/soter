@@ -23,7 +23,7 @@ SOTER features both early and lightweight detections.
 
 Dataset includes follwing collections:
 
-* BinaryDataset - includes 48,099 malicious binaries.
+* BinaryStringDataset - includes the binary strings we extracted from the 48,099 malicious binaries.
 * ScriptDataset - includes 3,439 malicious Linux  shell  scripts and 9,337 benign firmware scripts.
 * OpenWrtLogs - has two parts. The part one includes 352,016 different infection incidents, the part two includes 147,860 different infection incidents. Collected from around 200 high-fidelity software (virtual) IoT devices (as honeypots) on public clouds across the globe at 32 geographically different locations.
 
